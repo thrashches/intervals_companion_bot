@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/bot-avatar.png" alt="Intervals Companion" width="160" height="160">
+  <img src="docs/assets/github-social-preview.png" alt="Intervals Companion" width="160" height="160">
 </p>
 
 # Intervals Companion Bot
