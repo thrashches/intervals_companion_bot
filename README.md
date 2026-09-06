@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/bot-avatar.png" alt="Intervals Companion" width="160" height="160">
+</p>
+
 # Intervals Companion Bot
 
 Telegram-бот-компаньон для [intervals.icu](https://intervals.icu): план тренировок, форма, анонсы и отчёты после активности.
