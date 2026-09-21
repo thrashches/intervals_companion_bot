@@ -14,11 +14,15 @@ HELP_TEXT = (
     "/start — начать / статус\n"
     "/plan — план на сегодня и завтра (с картинками)\n"
     "/reports — отчёты по последним тренировкам\n"
-    "/form — форма (CTL/ATL/TSB), вес, VO2max\n"
-    "/settings — расписание анонсов\n"
+    "/form — форма (CTL/ATL/TSB) + график за 30 дней\n"
+    "/zones — распределение зон Z1–Z5 за неделю\n"
+    "/analyze — AI-анализ дня или недели\n"
+    "/settings — расписание анонсов и анализа\n"
     "/disconnect — отключить API-ключ\n"
     "/help — эта справка\n\n"
-    "Бот присылает анонс тренировки по расписанию и отчёт после загрузки активности."
+    "Бот присылает анонс тренировки по расписанию, отчёт после загрузки "
+    "активности и AI-анализ дня (по умолчанию в 21:30; в воскресенье — ещё и недели "
+    "с графиками формы и зон)."
 )
 
 
@@ -64,11 +68,14 @@ def format_settings(settings: dict) -> str:
     days = settings.get("announce_days") or list(range(7))
     day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
     days_str = ", ".join(day_names[d] for d in days if 0 <= d <= 6)
+    analysis_time = settings.get("analysis_time") or "21:30:00"
     return (
         "⚙️ <b>Настройки уведомлений</b>\n"
         f"Анонсы: {'вкл' if settings.get('announce_enabled') else 'выкл'}\n"
         f"Отчёты: {'вкл' if settings.get('report_enabled') else 'выкл'}\n"
+        f"AI-анализ: {'вкл' if settings.get('period_analysis_enabled', True) else 'выкл'}\n"
         f"Время анонса: {settings.get('announce_time')}\n"
+        f"Время анализа: {analysis_time}\n"
         f"Timezone: {settings.get('timezone')}\n"
-        f"Дни: {days_str}"
+        f"Дни анонсов: {days_str}"
     )

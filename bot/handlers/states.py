@@ -7,4 +7,5 @@ class ConnectStates(StatesGroup):
 
 class SettingsStates(StatesGroup):
     waiting_for_time = State()
+    waiting_for_analysis_time = State()
     waiting_for_timezone = State()

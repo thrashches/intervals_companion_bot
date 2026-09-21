@@ -24,6 +24,47 @@ class AthleteSnapshot(models.Model):
         return f"Form for {self.user_id} @ {self.as_of_date}"
 
 
+class WellnessDay(models.Model):
+    """Daily wellness row from intervals.icu (sleep, RHR, weight, subjective scores)."""
+
+    user = models.ForeignKey(
+        TelegramUser, on_delete=models.CASCADE, related_name="wellness_days"
+    )
+    date = models.DateField()
+    sleep_secs = models.IntegerField(null=True, blank=True)
+    sleep_quality = models.FloatField(null=True, blank=True)
+    sleep_score = models.FloatField(null=True, blank=True)
+    resting_hr = models.FloatField(null=True, blank=True)
+    avg_sleeping_hr = models.FloatField(null=True, blank=True)
+    hrv = models.FloatField(null=True, blank=True)
+    weight = models.FloatField(null=True, blank=True)
+    fatigue = models.FloatField(null=True, blank=True)  # subjective 1–4/10
+    soreness = models.FloatField(null=True, blank=True)
+    stress = models.FloatField(null=True, blank=True)
+    mood = models.FloatField(null=True, blank=True)
+    motivation = models.FloatField(null=True, blank=True)
+    injury = models.FloatField(null=True, blank=True)
+    readiness = models.FloatField(null=True, blank=True)
+    fitness = models.FloatField(null=True, blank=True)  # CTL
+    fatigue_atl = models.FloatField(null=True, blank=True)  # ATL
+    form = models.FloatField(null=True, blank=True)  # TSB
+    comments = models.TextField(blank=True, default="")
+    raw_json = models.JSONField(default=dict, blank=True)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Wellness день"
+        verbose_name_plural = "Wellness дни"
+        unique_together = ("user", "date")
+        indexes = [
+            models.Index(fields=["user", "date"]),
+        ]
+        ordering = ["-date"]
+
+    def __str__(self) -> str:
+        return f"Wellness {self.user_id} @ {self.date}"
+
+
 class CalendarEventCache(models.Model):
     user = models.ForeignKey(
         TelegramUser, on_delete=models.CASCADE, related_name="calendar_events"
@@ -78,7 +119,15 @@ class Activity(models.Model):
     )
     intervals_json = models.JSONField(default=list, blank=True)
     raw_json = models.JSONField(default=dict, blank=True)
+    # Seconds in each power zone from icu_zone_times (index 0 = Z1)
+    power_zone_secs = models.JSONField(default=list, blank=True)
+    # Seconds in each HR zone from icu_hr_zone_times (index 0 = Z1)
+    hr_zone_secs = models.JSONField(default=list, blank=True)
+    # Compact PRs from athlete power/HR curves, e.g.
+    # [{"metric":"power","duration_sec":300,"value":320,"label":"5 мин"}]
+    curve_prs = models.JSONField(default=list, blank=True)
     chart_path = models.CharField(max_length=512, blank=True, default="")
+    ai_summary = models.TextField(blank=True, default="")
     report_sent_at = models.DateTimeField(null=True, blank=True)
     synced_at = models.DateTimeField(auto_now=True)
 

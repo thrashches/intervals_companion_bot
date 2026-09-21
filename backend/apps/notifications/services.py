@@ -1,19 +1,54 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import httpx
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.utils import timezone
 
-from apps.charts.renderer import render_intervals_chart
 from apps.intervals.models import Activity, CalendarEventCache
 from apps.notifications.models import NotificationLog
 from apps.users.models import TelegramUser
 
 logger = logging.getLogger(__name__)
+
+
+class TelegramDeliveryError(Exception):
+    """Raised when Telegram Bot API rejects or rate-limits a message."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: int | None = None,
+        retry_after: float | None = None,
+    ):
+        super().__init__(message)
+        self.error_code = error_code
+        self.retry_after = retry_after
+
+    @property
+    def is_blocked(self) -> bool:
+        return self.error_code == 403
+
+    @property
+    def is_rate_limited(self) -> bool:
+        return self.error_code == 429
+
+
+def _parse_retry_after(data: dict, description: str) -> float | None:
+    params = data.get("parameters") or {}
+    if isinstance(params, dict) and params.get("retry_after") is not None:
+        try:
+            return float(params["retry_after"])
+        except (TypeError, ValueError):
+            pass
+    match = re.search(r"retry after (\d+)", description or "", re.IGNORECASE)
+    if match:
+        return float(match.group(1))
+    return None
 
 
 def _tg_api(method: str, **payload):
@@ -23,9 +58,22 @@ def _tg_api(method: str, **payload):
     url = f"https://api.telegram.org/bot{token}/{method}"
     with httpx.Client(timeout=60.0) as client:
         response = client.post(url, json=payload)
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError:
+            raise TelegramDeliveryError(
+                response.text or f"HTTP {response.status_code}",
+                error_code=response.status_code,
+            ) from None
         if not data.get("ok"):
-            raise RuntimeError(data.get("description") or response.text)
+            description = data.get("description") or response.text
+            error_code = data.get("error_code") or response.status_code
+            retry_after = _parse_retry_after(data, description)
+            raise TelegramDeliveryError(
+                description,
+                error_code=error_code,
+                retry_after=retry_after,
+            )
         return data.get("result") or {}
 
 
@@ -43,9 +91,22 @@ def _tg_send_photo(chat_id: int, photo_path: Path, caption: str) -> dict:
                 },
                 files={"photo": fh},
             )
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError:
+            raise TelegramDeliveryError(
+                response.text or f"HTTP {response.status_code}",
+                error_code=response.status_code,
+            ) from None
         if not data.get("ok"):
-            raise RuntimeError(data.get("description") or response.text)
+            description = data.get("description") or response.text
+            error_code = data.get("error_code") or response.status_code
+            retry_after = _parse_retry_after(data, description)
+            raise TelegramDeliveryError(
+                description,
+                error_code=error_code,
+                retry_after=retry_after,
+            )
         return data.get("result") or {}
 
 
@@ -187,6 +248,23 @@ def format_plan_event(event: CalendarEventCache | dict) -> str:
 
 
 
+def _format_curve_pr_line(pr: dict) -> str | None:
+    metric = pr.get("metric")
+    label = pr.get("label") or ""
+    value = pr.get("value")
+    if value is None:
+        return None
+    try:
+        value_f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if metric == "power":
+        return f"🏆 Новый рекорд: мощность {label} — {value_f:.0f} W"
+    if metric == "hr":
+        return f"🏆 Новый рекорд: пульс {label} — {value_f:.0f} bpm"
+    return f"🏆 Новый рекорд: {metric} {label} — {value_f:.0f}"
+
+
 def format_activity_report(activity: Activity) -> str:
     compliance = (
         f"{activity.compliance:.0f}%" if activity.compliance is not None else "—"
@@ -216,6 +294,12 @@ def format_activity_report(activity: Activity) -> str:
         lines.append(f"Набор: {activity.total_elevation_gain:.0f} м")
     if activity.matched_event:
         lines.append(f"План: {activity.matched_event.name}")
+    curve_prs = activity.curve_prs if isinstance(activity.curve_prs, list) else []
+    for pr in curve_prs:
+        if isinstance(pr, dict):
+            line = _format_curve_pr_line(pr)
+            if line:
+                lines.append(line)
     return "\n".join(lines)
 
 

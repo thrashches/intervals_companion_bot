@@ -12,7 +12,7 @@ from handlers.texts import (
     format_plan,
     format_settings,
 )
-from keyboards import connect_keyboard, main_menu, settings_keyboard
+from keyboards import analyze_keyboard, connect_keyboard, main_menu, settings_keyboard
 
 router = Router()
 api = BackendClient()
@@ -44,11 +44,12 @@ async def _send_chart_items(message: Message, items: list[dict]) -> int:
                 photo = BufferedInputFile(data, filename=chart_path.split("/")[-1])
                 await message.answer_photo(photo=photo, caption=caption)
                 sent += 1
-                continue
             except Exception:
-                pass
-        await message.answer(caption)
-        sent += 1
+                await message.answer(caption)
+                sent += 1
+        else:
+            await message.answer(caption)
+            sent += 1
     return sent
 
 
@@ -127,7 +128,7 @@ async def connect_receive_key(message: Message, state: FSMContext):
         name = result.get("athlete_name") or ""
         await message.answer(
             f"✅ Аккаунт подключен{f' ({name})' if name else ''}!\n"
-            "Используйте меню или команды /plan, /reports и /form.",
+            "Используйте меню или команды /plan, /reports, /form и /zones.",
             reply_markup=main_menu(connected=True),
         )
     except BackendAPIError as exc:
@@ -180,8 +181,83 @@ async def cmd_form(message: Message):
         await _ensure_user(message)
         data = api.get_form(_uid(message), refresh=True)
         await message.answer(format_form(data), reply_markup=main_menu(connected=True))
+        chart_path = data.get("chart_path")
+        if chart_path:
+            try:
+                raw = api.download_media(chart_path)
+                photo = BufferedInputFile(raw, filename=chart_path.split("/")[-1])
+                caption = (data.get("chart_caption") or "CTL / ATL / TSB")[:1024]
+                await message.answer_photo(photo=photo, caption=caption)
+            except Exception:
+                pass
     except BackendAPIError as exc:
         await message.answer(f"Не удалось получить форму: {exc}")
+
+
+@router.message(Command("zones"))
+@router.message(F.text == "📶 Зоны")
+async def cmd_zones(message: Message):
+    try:
+        await _ensure_user(message)
+        data = api.get_zones(_uid(message), refresh=True)
+        chart_path = data.get("chart_path")
+        caption = (data.get("caption") or "Зоны за неделю")[:1024]
+        if chart_path:
+            try:
+                raw = api.download_media(chart_path)
+                photo = BufferedInputFile(raw, filename=chart_path.split("/")[-1])
+                await message.answer_photo(
+                    photo=photo,
+                    caption=caption,
+                    reply_markup=main_menu(connected=True),
+                )
+                return
+            except Exception:
+                pass
+        await message.answer(caption, reply_markup=main_menu(connected=True))
+    except BackendAPIError as exc:
+        await message.answer(f"Не удалось получить зоны: {exc}")
+
+
+@router.message(Command("analyze"))
+@router.message(F.text == "🧠 Анализ")
+async def cmd_analyze(message: Message):
+    try:
+        user = await _ensure_user(message)
+        if not user.get("has_subscription"):
+            await message.answer(
+                "AI-анализ доступен по подписке. Обратитесь к администратору.",
+                reply_markup=main_menu(connected=True),
+            )
+            return
+        await message.answer(
+            "Выберите период для AI-анализа:",
+            reply_markup=analyze_keyboard(),
+        )
+    except BackendAPIError as exc:
+        await message.answer(f"Ошибка: {exc}")
+
+
+@router.callback_query(F.data.in_({"analyze:day", "analyze:week"}))
+async def analyze_callback(callback: CallbackQuery):
+    kind = "week" if callback.data == "analyze:week" else "day"
+    label = "недели" if kind == "week" else "дня"
+    try:
+        result = api.request_analyze(callback.from_user.id, kind=kind)
+        await callback.answer()
+        await callback.message.answer(
+            f"⏳ Анализ {label} поставлен в очередь "
+            f"({result.get('period_start')} — {result.get('period_end')}).\n"
+            "Результат придёт отдельным сообщением."
+        )
+    except BackendAPIError as exc:
+        await callback.answer()
+        if exc.status_code == 403:
+            await callback.message.answer(
+                "AI-анализ доступен по подписке. Обратитесь к администратору."
+            )
+        else:
+            await callback.message.answer(f"Не удалось запустить анализ: {exc}")
 
 
 @router.message(Command("settings"))
@@ -194,6 +270,7 @@ async def cmd_settings(message: Message, state: FSMContext):
         await message.answer(
             format_settings(settings),
             reply_markup=settings_keyboard(settings),
+            parse_mode="HTML",
         )
     except BackendAPIError as exc:
         await message.answer(f"Ошибка настроек: {exc}")
@@ -208,7 +285,9 @@ async def toggle_announce(callback: CallbackQuery):
             {"announce_enabled": not settings.get("announce_enabled", True)},
         )
         await callback.message.edit_text(
-            format_settings(updated), reply_markup=settings_keyboard(updated)
+            format_settings(updated),
+            reply_markup=settings_keyboard(updated),
+            parse_mode="HTML",
         )
         await callback.answer("Обновлено")
     except BackendAPIError as exc:
@@ -224,7 +303,31 @@ async def toggle_report(callback: CallbackQuery):
             {"report_enabled": not settings.get("report_enabled", True)},
         )
         await callback.message.edit_text(
-            format_settings(updated), reply_markup=settings_keyboard(updated)
+            format_settings(updated),
+            reply_markup=settings_keyboard(updated),
+            parse_mode="HTML",
+        )
+        await callback.answer("Обновлено")
+    except BackendAPIError as exc:
+        await callback.answer(str(exc), show_alert=True)
+
+
+@router.callback_query(F.data == "settings:toggle_analysis")
+async def toggle_analysis(callback: CallbackQuery):
+    try:
+        settings = api.get_settings(callback.from_user.id)
+        updated = api.patch_settings(
+            callback.from_user.id,
+            {
+                "period_analysis_enabled": not settings.get(
+                    "period_analysis_enabled", True
+                )
+            },
+        )
+        await callback.message.edit_text(
+            format_settings(updated),
+            reply_markup=settings_keyboard(updated),
+            parse_mode="HTML",
         )
         await callback.answer("Обновлено")
     except BackendAPIError as exc:
@@ -236,6 +339,15 @@ async def settings_set_time(callback: CallbackQuery, state: FSMContext):
     await state.set_state(SettingsStates.waiting_for_time)
     await callback.answer()
     await callback.message.answer("Введите время анонса в формате ЧЧ:ММ (например 08:30)")
+
+
+@router.callback_query(F.data == "settings:set_analysis_time")
+async def settings_set_analysis_time(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(SettingsStates.waiting_for_analysis_time)
+    await callback.answer()
+    await callback.message.answer(
+        "Введите время AI-анализа в формате ЧЧ:ММ (например 21:30)"
+    )
 
 
 @router.callback_query(F.data == "settings:set_tz")
@@ -259,10 +371,32 @@ async def receive_time(message: Message, state: FSMContext):
         updated = api.patch_settings(_uid(message), {"announce_time": value})
         await state.clear()
         await message.answer(
-            format_settings(updated), reply_markup=settings_keyboard(updated)
+            format_settings(updated),
+            reply_markup=settings_keyboard(updated),
+            parse_mode="HTML",
         )
     except Exception:
         await message.answer("Неверный формат. Пример: 07:45")
+
+
+@router.message(SettingsStates.waiting_for_analysis_time)
+async def receive_analysis_time(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    try:
+        hh, mm = text.split(":")
+        hour, minute = int(hh), int(mm)
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError
+        value = f"{hour:02d}:{minute:02d}:00"
+        updated = api.patch_settings(_uid(message), {"analysis_time": value})
+        await state.clear()
+        await message.answer(
+            format_settings(updated),
+            reply_markup=settings_keyboard(updated),
+            parse_mode="HTML",
+        )
+    except Exception:
+        await message.answer("Неверный формат. Пример: 21:30")
 
 
 @router.message(SettingsStates.waiting_for_timezone)
@@ -272,7 +406,9 @@ async def receive_tz(message: Message, state: FSMContext):
         updated = api.patch_settings(_uid(message), {"timezone": tz})
         await state.clear()
         await message.answer(
-            format_settings(updated), reply_markup=settings_keyboard(updated)
+            format_settings(updated),
+            reply_markup=settings_keyboard(updated),
+            parse_mode="HTML",
         )
     except BackendAPIError as exc:
         await message.answer(f"Не удалось сохранить timezone: {exc}")

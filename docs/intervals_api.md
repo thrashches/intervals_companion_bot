@@ -24,6 +24,11 @@ Athlete id в path: `0` = текущий атлет по ключу.
 | Fitness series | `GET /athlete/0/fitness?oldest=&newest=` |
 | Активности | `GET /athlete/0/activities?oldest=&newest=` |
 | Детали + интервалы | `GET /activity/{id}?intervals=true` |
+| Power curves | `GET /athlete/0/power-curves?curves=all&type=Ride` |
+| HR curves | `GET /athlete/0/hr-curves?curves=all&type=Ride` |
+
+Параметр `curves`: `1y`, `42d`, `s0`, `all`, или диапазон `r.YYYY-MM-DD.YYYY-MM-DD`.
+В ответе кривой — параллельные массивы `secs`, `values`, `activity_id`: если `activity_id[i]` совпадает с текущей активностью на ключевой длительности (5с…60м), это личный рекорд.
 
 ## Поля формы (wellness)
 
@@ -36,6 +41,23 @@ Athlete id в path: `0` = текущий атлет по ключу.
 - vo2max: последний непустой `vo2max` / `vo2_max` / `icu_vo2max` за окно wellness
 
 На заметку: в дневном wellness вес и VO2max часто `null` в дни без нового измерения — их нужно брать из более ранних записей.
+
+## Дневной wellness (WellnessDay)
+
+При sync формы строки wellness также сохраняются по дням для AI-анализа. Поля:
+
+| Поле у нас | ICU |
+|------------|-----|
+| `sleep_secs` | `sleepSecs` |
+| `sleep_quality` / `sleep_score` | `sleepQuality` / `sleepScore` |
+| `resting_hr` | `restingHR` |
+| `avg_sleeping_hr` | `avgSleepingHR` |
+| `hrv` | `hrv` / `hrvSDNN` |
+| `weight` | `weight` |
+| `fatigue` | `fatigue` (субъективный) |
+| `soreness`, `stress`, `mood`, `motivation` | одноимённые |
+| `injury`, `readiness` | `injury`, `readiness` |
+| `fitness` / `fatigue_atl` / `form` | `icu_ctl` / `icu_atl` / form |
 
 ## Документация
 

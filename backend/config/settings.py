@@ -29,6 +29,7 @@ INSTALLED_APPS = [
     "apps.intervals",
     "apps.notifications",
     "apps.charts",
+    "apps.ai",
 ]
 
 MIDDLEWARE = [
@@ -99,6 +100,11 @@ INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
 FERNET_KEY = os.getenv("FERNET_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 INTERVALS_API_BASE = os.getenv("INTERVALS_API_BASE", "https://intervals.icu/api/v1").rstrip("/")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+DEEPSEEK_MAX_TOKENS = int(os.getenv("DEEPSEEK_MAX_TOKENS", "4096"))
+DEEPSEEK_TIMEOUT = float(os.getenv("DEEPSEEK_TIMEOUT", "180"))
 
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", os.getenv("REDIS_URL", "redis://localhost:6379/0"))
 CELERY_RESULT_BACKEND = os.getenv(
@@ -129,6 +135,14 @@ CELERY_BEAT_SCHEDULE = {
     },
     "send-workout-announces": {
         "task": "apps.notifications.tasks.send_workout_announces",
+        "schedule": crontab(minute="*"),
+    },
+    "send-period-analyses": {
+        "task": "apps.notifications.tasks.send_period_analyses",
+        "schedule": crontab(minute="*"),
+    },
+    "process-queued-news": {
+        "task": "apps.notifications.tasks.process_queued_news",
         "schedule": crontab(minute="*"),
     },
     "validate-credentials": {

@@ -5,7 +5,8 @@ def main_menu(connected: bool = False) -> ReplyKeyboardMarkup:
     if connected:
         rows = [
             [KeyboardButton(text="📅 План"), KeyboardButton(text="📊 Отчёты")],
-            [KeyboardButton(text="💪 Форма"), KeyboardButton(text="⚙️ Настройки")],
+            [KeyboardButton(text="💪 Форма"), KeyboardButton(text="📶 Зоны")],
+            [KeyboardButton(text="🧠 Анализ"), KeyboardButton(text="⚙️ Настройки")],
             [KeyboardButton(text="ℹ️ Помощь")],
         ]
     else:
@@ -16,7 +17,6 @@ def main_menu(connected: bool = False) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-
 def connect_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -25,9 +25,21 @@ def connect_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def analyze_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Анализ дня", callback_data="analyze:day"),
+                InlineKeyboardButton(text="Анализ недели", callback_data="analyze:week"),
+            ]
+        ]
+    )
+
+
 def settings_keyboard(settings: dict) -> InlineKeyboardMarkup:
     ann = "✅ Вкл" if settings.get("announce_enabled") else "❌ Выкл"
     rep = "✅ Вкл" if settings.get("report_enabled") else "❌ Выкл"
+    ai = "✅ Вкл" if settings.get("period_analysis_enabled", True) else "❌ Выкл"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -42,7 +54,18 @@ def settings_keyboard(settings: dict) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
+                    text=f"AI-анализ: {ai}", callback_data="settings:toggle_analysis"
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="Изменить время анонса", callback_data="settings:set_time"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Изменить время анализа",
+                    callback_data="settings:set_analysis_time",
                 )
             ],
             [

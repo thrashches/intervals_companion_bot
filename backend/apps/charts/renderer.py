@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -244,6 +245,174 @@ def render_intervals_chart(
     ax.set_ylabel(y_label, color="#cccccc")
     if title:
         ax.set_title(title, color="#ffffff", fontsize=11, pad=10)
+
+    fig.savefig(full_path, dpi=140, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    return f"charts/{filename}"
+
+
+def _charts_dir() -> Path:
+    media_root = Path(settings.MEDIA_ROOT)
+    charts_dir = media_root / "charts"
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    return charts_dir
+
+
+def render_form_trend_chart(
+    user_id: int,
+    series: list[dict],
+    title: str = "",
+    end_date: date | None = None,
+) -> str:
+    """
+    Line chart of CTL / ATL / TSB over days.
+    series items: {date: ISO str, ctl, atl, tsb} (values may be None).
+    Returns relative path under MEDIA_ROOT.
+    """
+    charts_dir = _charts_dir()
+    stamp = (end_date or date.today()).isoformat()
+    filename = f"form_{user_id}_{stamp}.png"
+    full_path = charts_dir / filename
+
+    fig, ax = plt.subplots(figsize=(11, 4.2), facecolor="#1a1a1a")
+    ax.set_facecolor("#1a1a1a")
+
+    if not series:
+        ax.text(
+            0.5,
+            0.5,
+            "Нет данных формы",
+            ha="center",
+            va="center",
+            color="white",
+        )
+        ax.set_xticks([])
+        ax.set_yticks([])
+        fig.savefig(full_path, dpi=140, bbox_inches="tight", facecolor=fig.get_facecolor())
+        plt.close(fig)
+        return f"charts/{filename}"
+
+    dates = [datetime.fromisoformat(item["date"]).date() for item in series]
+    ctl = [item.get("ctl") for item in series]
+    atl = [item.get("atl") for item in series]
+    tsb = [item.get("tsb") for item in series]
+
+    ax.plot(dates, ctl, color="#4a90d9", linewidth=2.0, label="CTL (Fitness)", marker="o", markersize=3)
+    ax.plot(dates, atl, color="#f0ad4e", linewidth=2.0, label="ATL (Fatigue)", marker="o", markersize=3)
+    ax.plot(dates, tsb, color="#5cb85c", linewidth=2.0, label="TSB (Form)", marker="o", markersize=3)
+    ax.axhline(0, color="#666666", linewidth=0.8, linestyle="--")
+
+    ax.legend(facecolor="#2a2a2a", edgecolor="#444444", labelcolor="#dddddd", fontsize=9)
+    ax.tick_params(colors="#cccccc")
+    for spine in ax.spines.values():
+        spine.set_color("#444444")
+    ax.set_xlabel("Дата", color="#cccccc")
+    ax.set_ylabel("Значение", color="#cccccc")
+    if title:
+        ax.set_title(title, color="#ffffff", fontsize=11, pad=10)
+    fig.autofmt_xdate()
+
+    fig.savefig(full_path, dpi=140, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    return f"charts/{filename}"
+
+
+def render_zone_distribution_chart(
+    user_id: int,
+    actual_secs: list[int],
+    planned_secs: list[int] | None,
+    source: str = "power",
+    period_start: date | None = None,
+    period_end: date | None = None,
+    title: str = "",
+) -> str:
+    """
+    Grouped bar chart: actual vs planned time in Z1–Z5(+).
+    Returns relative path under MEDIA_ROOT.
+    """
+    charts_dir = _charts_dir()
+    start_s = period_start.isoformat() if period_start else "start"
+    end_s = period_end.isoformat() if period_end else "end"
+    filename = f"zones_{user_id}_{start_s}_{end_s}.png"
+    full_path = charts_dir / filename
+
+    labels = ["Z1", "Z2", "Z3", "Z4", "Z5+"]
+    actual = list(actual_secs or [0, 0, 0, 0, 0])[:5]
+    while len(actual) < 5:
+        actual.append(0)
+    planned = None
+    if planned_secs is not None:
+        planned = list(planned_secs or [0, 0, 0, 0, 0])[:5]
+        while len(planned) < 5:
+            planned.append(0)
+
+    fig, ax = plt.subplots(figsize=(10, 4.5), facecolor="#1a1a1a")
+    ax.set_facecolor("#1a1a1a")
+
+    x = list(range(5))
+    width = 0.36 if planned is not None else 0.55
+    actual_min = [s / 60.0 for s in actual]
+    colors = [ZONE_COLORS.get(i + 1, "#888888") for i in range(5)]
+
+    if planned is not None:
+        planned_min = [s / 60.0 for s in planned]
+        ax.bar(
+            [i - width / 2 for i in x],
+            actual_min,
+            width=width,
+            color=colors,
+            alpha=0.95,
+            label="Факт",
+            edgecolor="#111111",
+            linewidth=0.4,
+        )
+        ax.bar(
+            [i + width / 2 for i in x],
+            planned_min,
+            width=width,
+            color=colors,
+            alpha=0.35,
+            label="План",
+            edgecolor="#aaaaaa",
+            linewidth=0.6,
+            hatch="//",
+        )
+        ax.legend(facecolor="#2a2a2a", edgecolor="#444444", labelcolor="#dddddd", fontsize=9)
+    else:
+        ax.bar(
+            x,
+            actual_min,
+            width=width,
+            color=colors,
+            alpha=0.95,
+            edgecolor="#111111",
+            linewidth=0.4,
+        )
+
+    total = sum(actual) or 1
+    for i, secs in enumerate(actual):
+        pct = 100.0 * secs / total
+        height = actual_min[i]
+        if height > 0:
+            ax.text(
+                i - (width / 2 if planned is not None else 0),
+                height,
+                f"{pct:.0f}%",
+                ha="center",
+                va="bottom",
+                color="#dddddd",
+                fontsize=8,
+            )
+
+    source_label = "мощность" if source == "power" else "пульс"
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, color="#cccccc")
+    ax.tick_params(colors="#cccccc")
+    for spine in ax.spines.values():
+        spine.set_color("#444444")
+    ax.set_ylabel("Минуты", color="#cccccc")
+    chart_title = f"{title} ({source_label})" if title else f"Распределение зон ({source_label})"
+    ax.set_title(chart_title, color="#ffffff", fontsize=11, pad=10)
 
     fig.savefig(full_path, dpi=140, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close(fig)

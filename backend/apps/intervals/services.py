@@ -9,7 +9,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from apps.intervals.client import IntervalsAPIError, IntervalsClient
-from apps.intervals.models import Activity, AthleteSnapshot, CalendarEventCache
+from apps.intervals.models import Activity, AthleteSnapshot, CalendarEventCache, WellnessDay
 from apps.users.models import TelegramUser
 
 logger = logging.getLogger(__name__)
@@ -127,6 +127,86 @@ def extract_compliance(activity: dict) -> float | None:
     return round(value, 1)
 
 
+def _as_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def extract_wellness_day_fields(row: dict) -> dict:
+    """Map intervals.icu wellness row to WellnessDay fields."""
+    form_fields = extract_form_fields(row)
+    comments = row.get("comments") or row.get("note") or ""
+    if comments is not None and not isinstance(comments, str):
+        comments = str(comments)
+    return {
+        "sleep_secs": _as_int(_first(row, "sleepSecs", "sleep_secs")),
+        "sleep_quality": _first(row, "sleepQuality", "sleep_quality"),
+        "sleep_score": _first(row, "sleepScore", "sleep_score"),
+        "resting_hr": _first(row, "restingHR", "resting_hr", "restingHr"),
+        "avg_sleeping_hr": _first(row, "avgSleepingHR", "avg_sleeping_hr"),
+        "hrv": _first(row, "hrv", "hrvSDNN"),
+        "weight": form_fields.get("weight"),
+        "fatigue": _first(row, "fatigue"),  # subjective wellness score
+        "soreness": _first(row, "soreness"),
+        "stress": _first(row, "stress"),
+        "mood": _first(row, "mood"),
+        "motivation": _first(row, "motivation"),
+        "injury": _first(row, "injury"),
+        "readiness": _first(row, "readiness"),
+        "fitness": form_fields.get("fitness"),
+        "fatigue_atl": _first(row, "icu_atl", "atl"),
+        "form": form_fields.get("form"),
+        "comments": comments or "",
+    }
+
+
+def _wellness_row_date(row: dict) -> date | None:
+    raw = row.get("id") or row.get("date") or row.get("localDate")
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(str(raw)[:10])
+    except ValueError:
+        return None
+
+
+def upsert_wellness_days(user: TelegramUser, rows: list[dict]) -> int:
+    """Persist wellness rows for a user. Returns number of upserted days."""
+    count = 0
+    for row in rows:
+        day = _wellness_row_date(row)
+        if not day:
+            continue
+        fields = extract_wellness_day_fields(row)
+        WellnessDay.objects.update_or_create(
+            user=user,
+            date=day,
+            defaults={**fields, "raw_json": row},
+        )
+        count += 1
+    return count
+
+
+def sync_wellness_days(
+    user: TelegramUser,
+    *,
+    oldest: date | None = None,
+    newest: date | None = None,
+) -> int:
+    """Fetch wellness from ICU and upsert WellnessDay rows."""
+    client = client_for_user(user)
+    newest = newest or date.today()
+    oldest = oldest or (newest - timedelta(days=90))
+    rows = client.get_wellness(oldest.isoformat(), newest.isoformat())
+    if not rows:
+        return 0
+    return upsert_wellness_days(user, rows)
+
+
 @transaction.atomic
 def sync_form(user: TelegramUser) -> AthleteSnapshot:
     client = client_for_user(user)
@@ -145,6 +225,9 @@ def sync_form(user: TelegramUser) -> AthleteSnapshot:
         key=lambda r: str(r.get("id") or r.get("date") or ""),
         reverse=True,
     )
+    if rows:
+        upsert_wellness_days(user, rows)
+
     best = sorted_rows[0] if sorted_rows else {}
     athlete: dict = {}
     try:
@@ -239,6 +322,8 @@ def upsert_activity_from_detail(user: TelegramUser, detail: dict) -> Activity:
             compliance = round(min(actual / planned, 1.5) * 100, 1)
 
     intervals = detail.get("icu_intervals") or detail.get("intervals") or []
+    from apps.intervals.zones import parse_hr_zone_secs, parse_power_zone_secs
+
     activity, _ = Activity.objects.update_or_create(
         user=user,
         external_id=external_id,
@@ -259,12 +344,41 @@ def upsert_activity_from_detail(user: TelegramUser, detail: dict) -> Activity:
             "matched_event": matched,
             "intervals_json": intervals,
             "raw_json": detail,
+            "power_zone_secs": parse_power_zone_secs(detail),
+            "hr_zone_secs": parse_hr_zone_secs(detail),
         },
     )
     return activity
 
 
+def sync_activities_for_range(user: TelegramUser, lookback_days: int = 7) -> list[Activity]:
+    """Fetch and upsert all activities in the lookback window (refresh zone fields)."""
+    from apps.intervals.curves import refresh_activity_curve_prs
+
+    client = client_for_user(user)
+    newest = date.today()
+    oldest = newest - timedelta(days=lookback_days)
+    summaries = client.get_activities(oldest.isoformat(), newest.isoformat())
+    updated: list[Activity] = []
+    for summary in summaries:
+        external_id = str(summary.get("id") or "")
+        if not external_id:
+            continue
+        detail = client.get_activity(external_id, intervals=True)
+        activity = upsert_activity_from_detail(user, detail)
+        try:
+            refresh_activity_curve_prs(client, activity)
+        except Exception:
+            logger.exception(
+                "curve PR detection failed for activity %s", activity.external_id
+            )
+        updated.append(activity)
+    return updated
+
+
 def poll_new_activities(user: TelegramUser, lookback_days: int = 3) -> list[Activity]:
+    from apps.intervals.curves import refresh_activity_curve_prs
+
     client = client_for_user(user)
     newest = date.today()
     oldest = newest - timedelta(days=lookback_days)
@@ -279,6 +393,12 @@ def poll_new_activities(user: TelegramUser, lookback_days: int = 3) -> list[Acti
             continue
         detail = client.get_activity(external_id, intervals=True)
         activity = upsert_activity_from_detail(user, detail)
+        try:
+            refresh_activity_curve_prs(client, activity)
+        except Exception:
+            logger.exception(
+                "curve PR detection failed for activity %s", activity.external_id
+            )
         new_or_updated.append(activity)
     return new_or_updated
 
@@ -461,17 +581,21 @@ def recent_reports_payload(user: TelegramUser, limit: int = 5) -> dict:
                     activity.start_date_local.isoformat() if activity.start_date_local else None
                 ),
                 "caption": format_activity_report(activity),
+                "ai_summary": activity.ai_summary or "",
                 "chart_path": chart_path,
             }
         )
     return {"items": items, "as_of": timezone.now().isoformat()}
 
 
-def form_payload(user: TelegramUser) -> dict:
+def form_payload(user: TelegramUser, with_chart: bool = False) -> dict:
+    from apps.charts.renderer import render_form_trend_chart
+
     snapshot = getattr(user, "athlete_snapshot", None)
     if not snapshot:
         return {"connected": True, "data": None}
-    return {
+
+    payload: dict = {
         "connected": True,
         "data": {
             "fitness": snapshot.fitness,
@@ -482,4 +606,86 @@ def form_payload(user: TelegramUser) -> dict:
             "as_of_date": snapshot.as_of_date.isoformat() if snapshot.as_of_date else None,
             "synced_at": snapshot.synced_at.isoformat() if snapshot.synced_at else None,
         },
+    }
+
+    if with_chart:
+        end = date.today()
+        start = end - timedelta(days=29)
+        days = list(
+            WellnessDay.objects.filter(user=user, date__gte=start, date__lte=end).order_by(
+                "date"
+            )
+        )
+        series = [
+            {
+                "date": d.date.isoformat(),
+                "ctl": d.fitness,
+                "atl": d.fatigue_atl,
+                "tsb": d.form,
+            }
+            for d in days
+            if d.fitness is not None or d.fatigue_atl is not None or d.form is not None
+        ]
+        chart_path = ""
+        caption = "📈 CTL / ATL / TSB — последние 30 дней"
+        if series:
+            try:
+                chart_path = render_form_trend_chart(
+                    user.id,
+                    series,
+                    title="Форма: CTL / ATL / TSB (30 дней)",
+                    end_date=end,
+                )
+            except Exception:
+                logger.exception("form trend chart failed user=%s", user.id)
+        payload["chart_path"] = chart_path
+        payload["chart_caption"] = caption
+
+    return payload
+
+
+def zones_payload(
+    user: TelegramUser,
+    period_start: date | None = None,
+    period_end: date | None = None,
+) -> dict:
+    from apps.charts.renderer import render_zone_distribution_chart
+    from apps.intervals.zones import (
+        aggregate_actual_zones,
+        aggregate_planned_zones,
+        current_week_bounds,
+        format_zone_caption,
+    )
+
+    if period_start is None or period_end is None:
+        period_start, period_end = current_week_bounds(user)
+
+    actual = aggregate_actual_zones(user, period_start, period_end)
+    planned = aggregate_planned_zones(
+        user, period_start, period_end, source=actual.get("source") or "power"
+    )
+    caption = format_zone_caption(actual, planned, period_start, period_end)
+    chart_path = ""
+    try:
+        chart_path = render_zone_distribution_chart(
+            user_id=user.id,
+            actual_secs=actual["secs"],
+            planned_secs=planned["secs"] if planned.get("has_plan") else None,
+            source=actual.get("source") or "power",
+            period_start=period_start,
+            period_end=period_end,
+            title=f"Зоны {period_start.isoformat()} — {period_end.isoformat()}",
+        )
+    except Exception:
+        logger.exception("zone distribution chart failed user=%s", user.id)
+
+    return {
+        "connected": True,
+        "period_start": period_start.isoformat(),
+        "period_end": period_end.isoformat(),
+        "actual": actual,
+        "planned": planned,
+        "source": actual.get("source"),
+        "chart_path": chart_path,
+        "caption": caption,
     }

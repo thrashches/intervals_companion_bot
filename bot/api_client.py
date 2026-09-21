@@ -81,6 +81,10 @@ class BackendClient:
         q = "?refresh=1" if refresh else ""
         return self._request("GET", f"/api/v1/bot/users/{telegram_id}/form{q}")
 
+    def get_zones(self, telegram_id: int, refresh: bool = True) -> dict:
+        q = "?refresh=1" if refresh else ""
+        return self._request("GET", f"/api/v1/bot/users/{telegram_id}/zones{q}")
+
     def get_recent_reports(self, telegram_id: int, limit: int = 5) -> dict:
         return self._request(
             "GET", f"/api/v1/bot/users/{telegram_id}/reports/recent?limit={limit}"
@@ -103,4 +107,12 @@ class BackendClient:
     def patch_settings(self, telegram_id: int, payload: dict) -> dict:
         return self._request(
             "PATCH", f"/api/v1/bot/users/{telegram_id}/settings", json=payload
+        )
+
+    def request_analyze(self, telegram_id: int, kind: str = "day", date: str | None = None) -> dict:
+        payload: dict[str, Any] = {"kind": kind}
+        if date:
+            payload["date"] = date
+        return self._request(
+            "POST", f"/api/v1/bot/users/{telegram_id}/analyze", json=payload
         )

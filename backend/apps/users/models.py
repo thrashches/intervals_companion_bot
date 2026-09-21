@@ -1,4 +1,6 @@
 from django.db import models
+from django.db.models import Q
+from django.utils import timezone
 from timezone_field import TimeZoneField
 
 from apps.users.crypto import decrypt_value, encrypt_value
@@ -11,6 +13,10 @@ class TelegramUser(models.Model):
     language_code = models.CharField(max_length=16, blank=True, default="ru")
     timezone = TimeZoneField(default="Europe/Moscow")
     is_active = models.BooleanField(default=True)
+    is_test_account = models.BooleanField(
+        default=False,
+        help_text="Тестовый аккаунт для пробной рассылки новостей",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -20,6 +26,46 @@ class TelegramUser(models.Model):
 
     def __str__(self) -> str:
         return f"{self.telegram_id} (@{self.username or '—'})"
+
+    def active_subscription(self) -> "Subscription | None":
+        now = timezone.now()
+        # Prefer prefetched/annotated data when available
+        if hasattr(self, "_active_subscription_cache"):
+            return self._active_subscription_cache
+        if (
+            hasattr(self, "_prefetched_objects_cache")
+            and "subscriptions" in self._prefetched_objects_cache
+        ):
+            for sub in self.subscriptions.all():
+                if sub.is_currently_active(now=now):
+                    self._active_subscription_cache = sub
+                    return sub
+            self._active_subscription_cache = None
+            return None
+        sub = (
+            self.subscriptions.filter(
+                is_active=True,
+                starts_at__lte=now,
+                ends_at__gt=now,
+            )
+            .order_by("-ends_at")
+            .first()
+        )
+        self._active_subscription_cache = sub
+        return sub
+
+    @property
+    def has_active_subscription(self) -> bool:
+        if hasattr(self, "has_active_subscription_ann"):
+            return bool(self.has_active_subscription_ann)
+        return self.active_subscription() is not None
+
+    @property
+    def subscription_expires_at(self):
+        if hasattr(self, "active_subscription_ends_at"):
+            return self.active_subscription_ends_at
+        sub = self.active_subscription()
+        return sub.ends_at if sub else None
 
 
 class IntervalsCredentials(models.Model):
@@ -58,7 +104,14 @@ class NotificationSettings(models.Model):
     announce_time = models.TimeField(default="08:00")
     announce_days = models.JSONField(default=list)  # 0=Mon ... 6=Sun
     report_enabled = models.BooleanField(default=True)
-    morning_summary_enabled = models.BooleanField(default=False)
+    period_analysis_enabled = models.BooleanField(
+        default=True,
+        help_text="Дневной и воскресный недельный AI-анализ",
+    )
+    analysis_time = models.TimeField(
+        default="21:30",
+        help_text="Локальное время отправки дневного/недельного анализа",
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -72,3 +125,39 @@ class NotificationSettings(models.Model):
 
     def __str__(self) -> str:
         return f"Notify settings for {self.user_id}"
+
+
+class Subscription(models.Model):
+    user = models.ForeignKey(
+        TelegramUser, on_delete=models.CASCADE, related_name="subscriptions"
+    )
+    starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField()
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Ручное отключение до окончания срока",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Подписка"
+        verbose_name_plural = "Подписки"
+        ordering = ["-ends_at"]
+        indexes = [
+            models.Index(fields=["user", "ends_at"]),
+            models.Index(fields=["is_active", "ends_at"]),
+        ]
+
+    def __str__(self) -> str:
+        status = "active" if self.is_currently_active() else "inactive"
+        return f"Subscription #{self.pk} for {self.user_id} ({status})"
+
+    def is_currently_active(self, *, now=None) -> bool:
+        now = now or timezone.now()
+        return self.is_active and self.starts_at <= now < self.ends_at
+
+    @staticmethod
+    def active_q(*, now=None) -> Q:
+        now = now or timezone.now()
+        return Q(is_active=True, starts_at__lte=now, ends_at__gt=now)

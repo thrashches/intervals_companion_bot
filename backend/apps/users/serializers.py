@@ -18,6 +18,8 @@ class TelegramUserSerializer(serializers.ModelSerializer):
     has_credentials = serializers.SerializerMethodField()
     credentials_valid = serializers.SerializerMethodField()
     timezone = serializers.SerializerMethodField()
+    has_subscription = serializers.SerializerMethodField()
+    subscription_expires_at = serializers.SerializerMethodField()
 
     class Meta:
         model = TelegramUser
@@ -30,6 +32,8 @@ class TelegramUserSerializer(serializers.ModelSerializer):
             "is_active",
             "has_credentials",
             "credentials_valid",
+            "has_subscription",
+            "subscription_expires_at",
         ]
 
     def get_timezone(self, obj: TelegramUser) -> str:
@@ -43,6 +47,13 @@ class TelegramUserSerializer(serializers.ModelSerializer):
             return obj.credentials.is_valid
         return False
 
+    def get_has_subscription(self, obj: TelegramUser) -> bool:
+        return obj.has_active_subscription
+
+    def get_subscription_expires_at(self, obj: TelegramUser):
+        expires = obj.subscription_expires_at
+        return expires.isoformat() if expires else None
+
 
 class NotificationSettingsSerializer(serializers.ModelSerializer):
     timezone = serializers.CharField(source="user.timezone", required=False)
@@ -54,15 +65,18 @@ class NotificationSettingsSerializer(serializers.ModelSerializer):
             "announce_time",
             "announce_days",
             "report_enabled",
-            "morning_summary_enabled",
+            "period_analysis_enabled",
+            "analysis_time",
             "timezone",
         ]
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
         data["timezone"] = str(instance.user.timezone)
-        if data.get("announce_time") and hasattr(data["announce_time"], "isoformat"):
-            data["announce_time"] = data["announce_time"].isoformat()
+        for time_key in ("announce_time", "analysis_time"):
+            value = data.get(time_key)
+            if value and hasattr(value, "isoformat"):
+                data[time_key] = value.isoformat()
         return data
 
     def update(self, instance, validated_data):

@@ -112,3 +112,19 @@ class IntervalsClient:
     def get_activity(self, activity_id: str, intervals: bool = True) -> dict:
         params = {"intervals": "true"} if intervals else None
         return self._request("GET", f"/activity/{activity_id}", params=params)
+
+    def get_power_curves(self, curves: str = "all", activity_type: str = "Ride") -> Any:
+        data = self._request(
+            "GET",
+            f"/athlete/{self.athlete_id}/power-curves",
+            params={"curves": curves, "type": activity_type},
+        )
+        return data or {}
+
+    def get_hr_curves(self, curves: str = "all", activity_type: str = "Ride") -> Any:
+        data = self._request(
+            "GET",
+            f"/athlete/{self.athlete_id}/hr-curves",
+            params={"curves": curves, "type": activity_type},
+        )
+        return data or {}

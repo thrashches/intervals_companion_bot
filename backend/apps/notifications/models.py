@@ -7,7 +7,10 @@ class NotificationLog(models.Model):
     class Kind(models.TextChoices):
         ANNOUNCE = "announce", "Announce"
         REPORT = "report", "Report"
+        DAY_ANALYSIS = "day_analysis", "Day analysis"
+        WEEK_ANALYSIS = "week_analysis", "Week analysis"
         SYSTEM = "system", "System"
+        NEWS = "news", "News"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
@@ -39,3 +42,44 @@ class NotificationLog(models.Model):
 
     def __str__(self) -> str:
         return f"{self.kind}:{self.payload_ref} ({self.status})"
+
+
+class ServiceNews(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        SENDING = "sending", "Sending"
+        SENT = "sent", "Sent"
+        FAILED = "failed", "Failed"
+
+    title = models.CharField(max_length=255)
+    body_md = models.TextField(
+        help_text="Markdown: **bold**, *italic*, [link](url), `code`, списки",
+    )
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.DRAFT
+    )
+    ready_to_send = models.BooleanField(
+        default=False,
+        help_text="Пометить к массовой рассылке (подхватит Celery beat)",
+    )
+    send_generation = models.PositiveIntegerField(default=1)
+    sent_count = models.PositiveIntegerField(default=0)
+    failed_count = models.PositiveIntegerField(default=0)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Новость сервиса"
+        verbose_name_plural = "Новости сервиса"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.title} ({self.status})"
+
+    def payload_ref(self, *, test: bool = False, test_nonce: str = "") -> str:
+        base = f"news:{self.pk}:g{self.send_generation}"
+        if test:
+            return f"{base}:test:{test_nonce}" if test_nonce else f"{base}:test"
+        return base
