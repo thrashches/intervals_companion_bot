@@ -6,6 +6,8 @@
 
 Telegram-бот-компаньон для [intervals.icu](https://intervals.icu): план тренировок, форма, анонсы и отчёты после активности.
 
+Бот: [@intervals_companion_bot](https://t.me/intervals_companion_bot)
+
 Подробный план — в [plan.md](plan.md).
 
 ## Стек
